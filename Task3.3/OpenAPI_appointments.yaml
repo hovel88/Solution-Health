@@ -1,0 +1,201 @@
+openapi: 3.2.0
+info:
+  title: Здоровья+ — API записей к врачу
+  version: 1.0.0
+  description: |
+    API для получения пациентом списка своих предстоящих записей к врачу.
+    Версия 1.0.0 будет поддерживаться до 2027-06-01.
+servers:
+  - url: https://api.zdorovya-plus.ru/api/v1
+    description: Production
+
+paths:
+  /appointments:
+    get:
+      summary: Получить список предстоящих записей
+      description: |
+        Возвращает список записей к врачу для текущего пациента.
+        Пациент видит только свои записи (определяется по JWT-токену).
+        Поддерживает фильтрацию по статусу и пагинацию.
+      tags:
+        - Appointments
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          description: Фильтр по статусу записи
+          schema:
+            type: string
+            enum: [upcoming, completed, cancelled]
+            default: upcoming
+          example: upcoming
+        - name: limit
+          in: query
+          description: Количество записей на странице (макс. 100)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          example: 20
+        - name: offset
+          in: query
+          description: Смещение для пагинации (кол-во пропускаемых записей)
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          example: 0
+      responses:
+        '200':
+          description: Успешный ответ со списком записей
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Appointment'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+              example:
+                items:
+                  - id: "appt-123"
+                    doctor_name: "Иванов И.И."
+                    specialty: "Терапевт"
+                    slot_start: "2026-11-01T10:00:00Z"
+                    slot_end: "2026-11-01T10:30:00Z"
+                    status: "upcoming"
+                    clinic_address: "ул. Ленина, 10"
+                  - id: "appt-456"
+                    doctor_name: "Петрова П.П."
+                    specialty: "Эндокринолог"
+                    slot_start: "2026-11-05T14:00:00Z"
+                    slot_end: "2026-11-05T14:30:00Z"
+                    status: "upcoming"
+                    clinic_address: "ул. Ленина, 10"
+                pagination:
+                  total: 2
+                  limit: 20
+                  offset: 0
+                  next: null
+                  prev: null
+        '401':
+          description: Не аутентифицирован (токен отсутствует или недействителен)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                code: "UNAUTHORIZED"
+                message: "Требуется аутентификация"
+                traceId: "abc-123"
+        '422':
+          description: Некорректные параметры запроса (например, limit > 100)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                code: "VALIDATION_ERROR"
+                message: "Параметр limit не может превышать 100"
+                traceId: "def-456"
+        '500':
+          description: Внутренняя ошибка сервера
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                code: "INTERNAL_ERROR"
+                message: "Внутренняя ошибка сервера. Попробуйте позже."
+                traceId: "def-456"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT-токен, полученный при аутентификации пациента
+
+  schemas:
+    Appointment:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Уникальный идентификатор записи
+          example: "appt-123"
+        doctor_name:
+          type: string
+          description: ФИО врача
+          example: "Иванов И.И."
+        specialty:
+          type: string
+          description: Специальность врача
+          example: "Терапевт"
+        slot_start:
+          type: string
+          format: date-time
+          description: Время начала приёма (UTC)
+          example: "2026-11-01T10:00:00Z"
+        slot_end:
+          type: string
+          format: date-time
+          description: Время окончания приёма (UTC)
+          example: "2026-11-01T10:30:00Z"
+        status:
+          type: string
+          enum: [upcoming, completed, cancelled]
+          description: Статус записи
+          example: "upcoming"
+        clinic_address:
+          type: string
+          description: Адрес клиники
+          example: "ул. Ленина, 10"
+
+    Pagination:
+      type: object
+      properties:
+        total:
+          type: integer
+          description: Общее количество записей
+          example: 2
+        limit:
+          type: integer
+          description: Размер страницы
+          example: 20
+        offset:
+          type: integer
+          description: Текущее смещение
+          example: 0
+        next:
+          type: string
+          nullable: true
+          description: Ссылка на следующую страницу (если есть)
+          example: null
+        prev:
+          type: string
+          nullable: true
+          description: Ссылка на предыдущую страницу (если есть)
+          example: null
+
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Код ошибки
+          example: "UNAUTHORIZED"
+        message:
+          type: string
+          description: Человекочитаемое описание ошибки
+          example: "Требуется аутентификация"
+        traceId:
+          type: string
+          description: Идентификатор для трассировки
+          example: "abc-123"
