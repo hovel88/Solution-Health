@@ -1,0 +1,74 @@
+@startuml
+title Горизонтальное масштабирование (on-prem, без Kubernetes)
+
+skinparam componentStyle rectangle
+
+actor "Клиент\n(мобильное приложение)" as client
+component "API Gateway" as gw
+
+node "On-prem инфраструктура" {
+    component "Балансировщик\n(NGINX / HAProxy)" as lb
+
+    component "Экземпляр #1\n(Stateless)" as app1
+    component "Экземпляр #2\n(Stateless)" as app2
+    component "Экземпляр #3\n(Stateless)" as app3
+
+    database "Master DB\n(PostgreSQL)" as master
+    database "Read Replica #1\n(PostgreSQL)" as replica1
+    database "Read Replica #2\n(PostgreSQL)" as replica2
+
+    database "Redis\n(Кэш)" as redis
+}
+
+client --> gw : HTTPS/REST
+gw --> lb : HTTP/REST
+
+lb --> app1 : Round-robin
+lb --> app2 : Round-robin
+lb --> app3 : Round-robin
+
+app1 --> master : Запись (INSERT/UPDATE)
+app2 --> master : Запись (INSERT/UPDATE)
+app3 --> master : Запись (INSERT/UPDATE)
+
+app1 --> replica1 : Чтение (SELECT)
+app2 --> replica2 : Чтение (SELECT)
+app3 --> replica1 : Чтение (SELECT)
+
+master --> replica1 : Репликация
+master --> replica2 : Репликация
+
+app1 --> redis : Кэш
+app2 --> redis : Кэш
+app3 --> redis : Кэш
+
+note top of lb
+  **Балансировщик:**
+  Распределяет запросы
+  round-robin между
+  экземплярами.
+  
+  При отказе экземпляра
+  исключает его из пула
+  (health check).
+end note
+
+note right of master
+  **Master DB:**
+  Принимает только
+  запись (INSERT/UPDATE).
+  
+  Чтение — с реплик
+  (Read Replicas).
+end note
+
+note bottom of replica1
+  **Read Replicas:**
+  Принимают только
+  чтение (SELECT).
+  
+  Это снижает нагрузку
+  на мастер.
+end note
+
+@enduml

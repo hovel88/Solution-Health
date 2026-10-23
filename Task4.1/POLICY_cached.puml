@@ -1,0 +1,21 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+Person(patient, "Пациент")
+System(mobileApp, "Мобильное приложение")
+System(gateway, "API Gateway")
+SystemDb(policyCache, "Policy Cache (Redis)", "Кэш результатов проверки полиса (TTL 10 минут)")
+System(policy, "1С (Полисы)")
+
+Rel(patient, mobileApp, "Использует")
+Rel(mobileApp, gateway, "Запросы")
+Rel(gateway, policyCache, "1. Проверка кэша")
+Rel(gateway, policy, "2. При промахе кэша запрос идёт в 1С")
+Rel(gateway, policyCache, "3. Сохранение результата в кэш")
+
+note top of policyCache
+  **Инвалидация:** по TTL (10 минут).
+  1С — legacy, не может присылать события.
+end note
+
+@enduml

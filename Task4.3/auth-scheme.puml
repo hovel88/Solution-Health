@@ -1,0 +1,49 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Sequence.puml
+
+title Схема аутентификации мобильного приложения (OAuth2 + OIDC + PKCE)
+
+actor "Пациент" as patient
+participant "Мобильное приложение" as app
+participant "L7 Load Balancer\n(единая точка входа)" as lb
+participant "Keycloak (IDP)" as keycloak
+participant "API Gateway" as gateway
+participant "CRM" as crm
+
+== Первичный вход ==
+patient -> app : Нажимает "Войти"
+app -> lb : Authorization Request\nhttps://api.zdorovya-plus.ru/realms/zdorovya/protocol/openid-connect/auth\n(client_id, redirect_uri, code_challenge, PKCE)
+lb -> keycloak : Маршрутизация /realms/* → Keycloak
+patient -> keycloak : Вводит логин/пароль (или SMS-код)
+keycloak --> app : Redirect с authorization code
+app -> lb : Token Request\nhttps://api.zdorovya-plus.ru/realms/zdorovya/protocol/openid-connect/token\n(code + code_verifier)
+lb -> keycloak : Маршрутизация /realms/* → Keycloak
+keycloak --> app : access_token (JWT) + refresh_token
+app -> app : Сохраняет токены в Keychain/Keystore\n(secure storage)
+
+== Работа с API ==
+app -> lb : GET /api/v1/appointments\nAuthorization: Bearer <access_token>
+lb -> gateway : Маршрутизация /api/v1/* → API Gateway
+gateway -> gateway : Проверка подписи JWT\n(публичный ключ Keycloak)
+gateway -> gateway : Проверка срока действия
+alt Токен валиден
+    gateway -> crm : Запрос с patient_id из JWT
+    crm --> gateway : Данные
+    gateway --> app : 200 OK
+else Токен истёк
+    gateway --> app : 401 Unauthorized
+    app -> lb : POST /realms/zdorovya/protocol/openid-connect/token\nrefresh_token
+    lb -> keycloak : Маршрутизация /realms/* → Keycloak
+    keycloak --> app : Новый access_token + refresh_token
+    app -> app : Обновляет токены в secure storage
+    app -> lb : Повторный запрос с новым токеном
+end
+
+note right of lb
+  **Маршрутизация:**
+  /realms/*, /resources/* → Keycloak
+  /api/v1/* → API Gateway
+  /admin/*, /metrics, /health → блокировка
+end note
+
+@enduml
