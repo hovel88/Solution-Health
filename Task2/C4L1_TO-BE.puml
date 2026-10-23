@@ -1,0 +1,68 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+LAYOUT_WITH_LEGEND()
+title C4 Level 1 — Целевая архитектура "Здоровья+"" (TO-BE)
+
+' Акторы
+Person(patient, "Пациент", "Записывается, смотрит анализы, оплачивает")
+Person(doctor, "Врач", "Управляет расписанием, смотрит анализы")
+Person(labAssistant, "Лаборант", "Загружает и проверяет результаты анализов")
+Person(admin, "Администратор", "Управляет записями и расписанием")
+
+' Внешние системы
+System_Ext(payment, "Платёжный шлюз", "Онлайн-платежи")
+System_Ext(labEquipment, "Лабораторное оборудование", "Автоматическая загрузка анализов (FTP)")
+
+
+System(mobileApp, "Мобильное приложение", "iOS/Android. Новый цифровой канал для пациентов")
+
+
+System_Boundary(backendBoundary, "Бэкенд «Здоровья+»") {
+  System_Boundary(gatewayBoundary, "Интеграционный слой") {
+    System(gateway, "API Gateway", "Единая точка входа: маршрутизация, аутентификация, rate limiting, идемпотентность, Circuit Breaker")
+  }
+
+  System(webPortal, "Веб-портал", "Текущий интерфейс для пациентов, врачей и администраторов")
+  System(schedule, "Расписание", "Управление слотами, запись")
+  System(crm, "CRM", "Карточки пациентов, история")
+  System(lis, "LIS (Лаборатория)", "Результаты анализов, интеграция с оборудованием\n\n<b>Legacy (работает на SOAP/FTP), UI для лаборантов</b>")
+  System(policy, "Полисы (1С)", "Проверка ДМС")
+  System(notifications, "Уведомления", "Email, SMS, Push")
+}
+
+' Связи: Пациент
+Rel(patient, mobileApp, "Использует")
+Rel(patient, webPortal, "Использует (веб)", "HTTPS")
+Rel(mobileApp, gateway, "Запросы к API", "HTTPS / REST")
+Rel(webPortal, gateway, "Запросы к API", "HTTPS / REST")
+
+' Связи: Врач, Лаборант, Админ
+Rel(doctor, webPortal, "Управляет расписанием, смотрит анализы", "HTTPS")
+Rel(labAssistant, lis, "Просмотр результатов", "UI")
+Rel(admin, webPortal, "Управляет записями", "HTTPS")
+
+' Связи: Шлюз
+Rel(gateway, schedule, "Запись/слоты", "REST (sync, идемпотентно)")
+Rel(gateway, crm, "Данные пациента", "REST (sync)")
+Rel(gateway, policy, "Проверка полиса", "REST (sync, Circuit Breaker)")
+Rel(gateway, payment, "Оплата", "REST (sync, идемпотентность)")
+Rel(gateway, lis, "Результаты анализов", "REST (sync)")
+
+' Связи: Внутренние интеграции
+Rel(schedule, crm, "Обновление записей", "REST (sync)")
+Rel(lis, crm, "Передача результатов", "REST (sync, retry)")
+Rel(lis, labEquipment, "Загрузка данных", "FTP (batch)")
+Rel(crm, notifications, "Триггеры уведомлений", "RabbitMQ (async)")
+Rel(notifications, patient, "Push/SMS", "Async")
+
+
+note left of gateway
+  **Паттерны:**
+  - Rate Limiting
+  - Идемпотентность
+  - Circuit Breaker
+  - JWT (для пациентов)
+end note
+
+@enduml
