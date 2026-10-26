@@ -1,0 +1,103 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Sequence.puml
+
+title Успешный сценарий: запись к врачу + оплата + резервирование анализов
+
+actor "Пациент" as patient
+participant "API Gateway" as gateway
+participant "Saga Orchestrator" as orchestrator
+participant "1С (Полисы)" as policy
+participant "Kafka" as kafka
+participant "Расписание" as schedule
+participant "LIS (Лаборатория)" as lis
+participant "Платёжный шлюз" as payment
+
+autonumber "<b>[00]</b>"
+
+activate patient
+patient -> gateway ++ : POST /appointment\n{slot_id, patient_id, policy_id, idempotency_key}
+gateway -> gateway : Проверка идемпотентности\n(Idempotency-Key)
+gateway -> orchestrator ++ : StartSaga(appointment_id)
+deactivate gateway
+
+' Шаг 1: Проверка полиса
+note right of orchestrator : Шаг 1: Проверка полиса\nНекомпенсируемый (чтения)
+orchestrator -> policy ++ : Command: CheckPolicy(policy_id)
+alt Полис валиден
+    policy -> orchestrator : PolicyValid
+else Полис невалиден
+    policy -> orchestrator :PolicyInvalid
+    orchestrator --> patient : Ошибка: полис недействителен
+end
+deactivate policy
+
+' Шаг 2: Бронирование слота
+note right of orchestrator : Шаг 2: Бронирование слота\nКомпенсируемый (можно отменить)
+orchestrator -> kafka : Publish Command: ReserveSlot(slot_id)
+kafka -> schedule ++ : Consume Command
+alt Слот забронирован
+    schedule -> kafka : Publish Event: SlotReserved
+    kafka -> orchestrator : Consume Event
+else Слот не доступен
+    schedule -> kafka : Publish Event: ReserveFailed
+    kafka -> orchestrator : Consume Event
+    note right of orchestrator : Компенсации для 1С (Полисы) нет, т.к. это чтение
+    orchestrator --> patient : Ошибка: слот для записи недоступен
+end
+deactivate schedule
+
+' Шаг 3: Предварительный резерв лаборатории
+note right of orchestrator : Шаг 3: Предварительный резерв лаборатории\nКомпенсируемый (можно отменить)
+orchestrator -> kafka : Publish Command: SoftReserveLabSlot(patient_id)
+kafka -> lis ++ : Consume Command
+alt Лаборатория предварительно зарезервирована
+    lis -> kafka : Publish Event: LabSlotSoftReserved
+    kafka -> orchestrator : Consume Event
+else Зарезервировать лабораторию не удалось
+    lis -> kafka : Publish Event: LabSlotSoftFailed
+    kafka -> orchestrator : Consume Event
+    orchestrator -> kafka : Publish Command: ReleaseSlot (компенсация)
+    note right of orchestrator : Компенсации для 1С (Полисы) нет, т.к. это чтение
+    kafka -> schedule ++ : Consume Command
+    schedule -> kafka : Publish Event: SlotReleased
+    deactivate schedule
+    kafka -> orchestrator : Consume Event
+    orchestrator --> patient : Ошибка: лаборатория не зарезервирована
+end
+deactivate lis
+
+' Шаг 4: Оплата
+note right of orchestrator : Шаг 4: Оплата\nКомпенсируемый (отдельный процесс Refund)
+orchestrator -> payment ++ : Charge(amount, idempotency_key)
+alt Оплата успешна
+    payment -> orchestrator : PaymentSuccess
+
+    ' Шаг 5: Подтверждение резерва
+    note right of orchestrator : Шаг 5: Подтверждение резерва
+    orchestrator -> kafka : Publish Command: ConfirmLabSlot(patient_id)
+    kafka -> lis ++ : Consume Command
+    lis -> kafka : Publish Event: LabSlotConfirmed
+    deactivate lis
+    kafka -> orchestrator : Consume Event
+    orchestrator --> patient : Успех: запись подтверждена
+else Оплата не прошла
+    payment -> orchestrator : PaymentFailed
+
+    orchestrator -> kafka : Publish Command: ReleaseLabSlot (компенсация)
+    orchestrator -> kafka : Publish Command: ReleaseSlot (компенсация)
+    note right of orchestrator : Компенсации для 1С (Полисы) нет, т.к. это чтение
+    kafka -> lis ++ : Consume Command
+    lis -> kafka : Publish Event: LabSlotReleased
+    deactivate lis
+    kafka -> orchestrator : Consume Event
+    kafka -> schedule ++ : Consume Command
+    schedule -> kafka : Publish Event: SlotReleased
+    deactivate schedule
+    kafka -> orchestrator : Consume Event
+    orchestrator --> patient : Ошибка: оплата не прошла
+end
+deactivate payment
+
+deactivate orchestrator
+
+@enduml

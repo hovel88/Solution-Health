@@ -1,0 +1,27 @@
+@startuml
+participant "Saga Orchestrator" as orchestrator
+participant "1С (Полисы)" as policy
+participant "Retry Worker" as retry
+participant "DLQ в Kafka" as dlq
+actor "Администратор" as admin
+
+orchestrator -> policy : CheckPolicy (timeout 2s)
+alt 1С ответила за 2 секунды
+    policy --> orchestrator : PolicyValid
+else 1С не ответила
+    orchestrator -> orchestrator : policy_status = 'pending'
+    orchestrator -> retry : Задача на повторную проверку
+    retry -> policy : Retry 1 (timeout 2s)
+    alt Успех
+        policy --> retry : PolicyValid
+        retry -> orchestrator : Обновить policy_status = 'valid'
+    else Неудача
+        retry -> retry : Экспоненциальная задержка (30s, 1m, 5m, 15m)
+        retry -> policy : Retry 2...5
+        alt Все попытки неудачны
+            retry -> dlq : Задача в DLQ
+            dlq -> admin : Уведомление "Проверить полис #42"
+        end
+    end
+end
+@enduml
